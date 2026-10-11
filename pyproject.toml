@@ -21,7 +21,8 @@ dev = []
 
 [project.scripts]
 # Entry point wired up in Phase 0 step 3 (potato probe).
-# potato = "potato.cli:app"
+# Enables the `potato ...` console command after `pip install -e .`.
+potato = "potato.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["potato*"]
