@@ -222,7 +222,17 @@ def run_baseline(
         bin_path, model, repeats=repeats, pp=pp, tg=tg, ngl=ngl, flash_attn=flash_attn
     )
     print(">> " + " ".join(cmd))
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except FileNotFoundError as exc:
+        # llama-bench not found (not built, or not on PATH). Fail cleanly with
+        # guidance — never fabricate a result (docs/rules.md).
+        raise RuntimeError(
+            f"llama-bench executable not found at '{bin_path}'. Build it first: "
+            "scripts/build_cuda.ps1 (needs the CUDA Toolkit) or "
+            "scripts/build_vulkan.ps1, or pass --binary <path>. "
+            "See docs/memory.md for the environment fingerprint."
+        ) from exc
     if proc.returncode != 0:
         sys.stderr.write(proc.stdout)
         sys.stderr.write(proc.stderr)
