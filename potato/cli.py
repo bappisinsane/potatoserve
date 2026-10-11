@@ -42,8 +42,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output path for the hardware fingerprint (default: hardware.json).",
     )
 
+    p_bench = sub.add_parser(
+        "bench", help="Run a baseline llama-bench and store a section-8 record."
+    )
+    p_bench.add_argument("-m", "--model", required=True, help="Path to a GGUF model.")
+    p_bench.add_argument(
+        "--repeats", type=int, default=3, help="llama-bench repeats (min 3 per spec)."
+    )
+    p_bench.add_argument("--pp", type=int, default=512, help="Prefill tokens (-p).")
+    p_bench.add_argument("--tg", type=int, default=128, help="Decode tokens (-n).")
+    p_bench.add_argument("--ngl", type=int, default=None, help="GPU layers (-ngl).")
+    p_bench.add_argument(
+        "--flash-attn", default=None, help="Flash attention on|off|auto (-fa)."
+    )
+    p_bench.add_argument("--binary", default=None, help="Path to llama-bench binary.")
+    p_bench.add_argument(
+        "--results-dir",
+        default="results",
+        help="Directory to write the result record JSON (default: results).",
+    )
+    p_bench.add_argument("--run-id", default=None, help="Override the generated run id.")
+
     for name in COMMANDS:
-        if name == "probe":
+        if name in ("probe", "bench"):
             continue
         sub.add_parser(name, help=f"(not yet implemented) potato {name}")
 
@@ -61,6 +82,32 @@ def main(argv: Optional[List[str]] = None) -> int:
         from potato import probe as probe_mod
 
         return probe_mod.main(["--out", args.out])
+    if args.command == "bench":
+        from pathlib import Path
+
+        from potato import bench as bench_mod
+
+        if args.repeats < 3:
+            print(
+                "warning: spec (section 7) requires >= 3 repeats; continuing anyway.",
+                file=sys.stderr,
+            )
+        try:
+            bench_mod.run_baseline(
+                model=args.model,
+                results_dir=Path(args.results_dir),
+                repeats=args.repeats,
+                pp=args.pp,
+                tg=args.tg,
+                binary=args.binary,
+                ngl=args.ngl,
+                flash_attn=args.flash_attn,
+                run_id=args.run_id,
+            )
+        except (RuntimeError, ValueError) as exc:
+            print(f"potato bench: {exc}", file=sys.stderr)
+            return 1
+        return 0
 
     return _not_implemented(args.command)
 

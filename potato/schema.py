@@ -83,6 +83,17 @@ class ResultRecord:
     repeats: Optional[int] = None
     spread: Optional[Dict[str, Any]] = None
 
+    def __post_init__(self) -> None:
+        """Guarantee every §8 metric key is present.
+
+        Callers may pass a partial ``metrics`` dict (e.g. a baseline that only
+        measured prefill/decode throughput). We merge it over the blank set so
+        the record always exposes all §8 metrics, with unmeasured ones as null.
+        """
+        merged = _blank_metrics()
+        merged.update(self.metrics or {})
+        self.metrics = merged
+
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to a dict that contains exactly the §8 keys, in order."""
         out: Dict[str, Any] = {}
