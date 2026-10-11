@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "run_id": "baseline-20261011T133403Z",
+  "date": "2026-10-11T13:34:00Z",
+  "llama_cpp_commit": "d812350",
+  "build_flags": {
+    "tool": "llama-bench",
+    "backends": "Vulkan",
+    "repeats_default": 3
+  },
+  "driver": "616.56",
+  "os": "Windows",
+  "gpu": "NVIDIA GeForce GTX 1660 Ti",
+  "model_id": "models/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+  "model_sha256": "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
+  "config": {
+    "n_prompt": 512,
+    "n_gen": 128,
+    "n_gpu_layers": 99,
+    "flash_attn": -1,
+    "cache_type_k": "f16",
+    "cache_type_v": "f16"
+  },
+  "metrics": {
+    "prefill_tps": 4227.045145,
+    "decode_tps": 152.659673,
+    "vram_peak_mb": null,
+    "kl_mean": null,
+    "top1_agree": null,
+    "ppl": null,
+    "agent_success": null
+  },
+  "repeats": 3,
+  "spread": {
+    "decode_stddev_ts": 17.811987,
+    "prefill_stddev_ts": 90.041826,
+    "decode_samples_ts": [
+      147.6,
+      172.454,
+      137.925
+    ],
+    "prefill_samples_ts": [
+      4131.95,
+      4311,
+      4238.19
+    ]
+  }
+}
