@@ -13,7 +13,7 @@ Toolkit around llama.cpp that auto-tunes quantization, KV-cache, offload and dec
 - Phase: 0 (steps 1–4 done) — updated 2026-10-11
 - Done: repo scaffolded per project-spec §9; llama.cpp submodule pinned to v0.6.0; CUDA + Vulkan build scripts (flags verified against pinned source); `potato probe` + section-8 result schema; baseline runner (`potato bench` / `scripts/baseline_bench.*`) with ≥3 repeats. 16 unit tests pass (stdlib only, no deps added).
 - Blocked on hardware/toolchain: **CUDA Toolkit (nvcc) is not installed**, so a CUDA build + first baseline cannot run yet. Vulkan runtime + dev SDK headers also not confirmed.
-- Next action: install CUDA Toolkit, build via `scripts/build_cuda.ps1` (arch 75), then run `potato bench -m <model.gguf> --ngl 99` and paste the JSON record back.
+- Next action: (1) `winget install --id Kitware.CMake -e` (accept UAC — last attempt exit 1602 = cancelled); (2) `winget install --id Nvidia.CUDA --version 12.4 -e`; (3) open a NEW terminal; (4) `pip install -e .`; (5) `scripts/build_cuda.ps1` (arch 75); (6) `potato bench -m <model.gguf> --ngl 99 -fa auto` and paste the JSON record back.
 
 ## Decisions log
 | Date | Decision | Why |
@@ -25,6 +25,8 @@ Toolkit around llama.cpp that auto-tunes quantization, KV-cache, offload and dec
 | 2026-10-11 | probe/schema/bench use stdlib only (no psutil/GPUtil) | Same no-deps rule; shell out to `nvidia-smi`/`vulkaninfo` + WMI/`/proc` |
 | 2026-10-11 | `CMAKE_CUDA_ARCHITECTURES=75` set explicitly, `GGML_NATIVE=OFF` | Reproducible regardless of which GPU is attached at build time |
 | 2026-10-11 | CUDA build must fail loudly, never fabricate | Honest measurement (PRD pillar); `potato bench` exits non-zero with install guidance if `llama-bench` is missing |
+| 2026-10-11 | Install **CUDA 12.4** (not 13.x) for the 1660 Ti | llama.cpp pinned v0.6.0 Windows CUDA CI tests exactly `12.4` and `13.4`; 12.x unambiguously supports Turing SM 7.5 (13.x dropped Maxwell/Pascal/Volta). Owner approved 12.4 as the safe choice. winget pkg `12.4` = installer `cuda_12.4.1_551.78` |
+| 2026-10-11 | Omit `-DGGML_CUDA_CCCL_VERSION` in our build script | Pinned CMake: empty = "use the CCCL bundled with the installed CUDA Toolkit"; CI pins it only for reproducibility + to avoid a CCCL network fetch |
 
 ## Models chosen (fill in)
 - Dense: `<HF id>` — license: `<…>`
@@ -36,7 +38,7 @@ Toolkit around llama.cpp that auto-tunes quantization, KV-cache, offload and dec
 - RAM: 15.9 GB
 - GPU: NVIDIA GeForce GTX 1660 Ti, 6144 MiB, driver 616.56, compute_cap 7.5 → CUDA arch **75** (TU116, Turing)
 - Vulkan: runtime present (`vulkaninfo`); device = GTX 1660 Ti (dev SDK headers unconfirmed)
-- CUDA Toolkit (nvcc): **NOT installed** — CUDA build blocked until installed
+- CUDA Toolkit (nvcc): **NOT installed** — CUDA build blocked until installed. Decided: install **CUDA 12.4** via winget (owner-approved; safest for Turing SM 7.5, in pinned CI).
 - Python: 3.14.0 (3.10 also present)
 - Build tools on PATH: git 2.51.0, ninja (pip); **cmake not on PATH**; `cl` not on PATH (VS 2019 Build Tools present)
 - llama.cpp: submodule `third_party/llama.cpp` @ **v0.6.0** = `d81235049384534c167caea52b85a694f6103d14`
@@ -46,9 +48,6 @@ Toolkit around llama.cpp that auto-tunes quantization, KV-cache, offload and dec
 - Which models give the best tool-calling at ≤ 9B?
 - Does speculative decoding help on Pascal at all?
 - Which upstream issue is the best first PR?
-
-## Gotchas learned
-(append as you go — e.g. flag renames, backend quirks, thermal behavior)
 
 ## Gotchas learned
 - PowerShell treats a native command's stderr (incl. git's LF/CRLF warnings and unittest's progress) as an error exit — pipe to `Out-File`/`cmd /c … 2>&1` to read true output.
@@ -69,3 +68,4 @@ Toolkit around llama.cpp that auto-tunes quantization, KV-cache, offload and dec
 ## Session log
 - 2026-10-11 — project docs created.
 - 2026-10-11 — Phase 0 steps 1–4 implemented (scaffold, submodule v0.6.0, build scripts, probe+schema, baseline). All flag names checked against the pinned source. Environment fingerprinted via `potato probe`. CUDA build blocked: nvcc not installed.
+- 2026-10-11 — Wired `potato = "potato.cli:main"` console entry point; fixed `potato bench` to accept llama-bench short flags (`-fa`); 16 tests pass. Verified CUDA 12.4/13.4 from pinned v0.6.0 Windows CI; owner chose **CUDA 12.4**. Exact winget install commands issued (cmake + CUDA 12.4); awaiting owner to install + paste build/bench output.
