@@ -46,15 +46,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_bench = sub.add_parser(
         "bench", help="Run a baseline llama-bench and store a section-8 record."
     )
-    p_bench.add_argument("-m", "--model", required=True, help="Path to a GGUF model.")
     p_bench.add_argument(
-        "--repeats", type=int, default=3, help="llama-bench repeats (min 3 per spec)."
+        "-m", "--model", required=True, help="Path to a GGUF model."
     )
-    p_bench.add_argument("--pp", type=int, default=512, help="Prefill tokens (-p).")
-    p_bench.add_argument("--tg", type=int, default=128, help="Decode tokens (-n).")
-    p_bench.add_argument("--ngl", type=int, default=None, help="GPU layers (-ngl).")
     p_bench.add_argument(
-        "--flash-attn", default=None, help="Flash attention on|off|auto (-fa)."
+        "-r", "--repeats", type=int, default=3, help="llama-bench repeats (min 3 per spec)."
+    )
+    p_bench.add_argument("-p", "--pp", type=int, default=512, help="Prefill tokens (-p).")
+    p_bench.add_argument("-n", "--tg", type=int, default=128, help="Decode tokens (-n).")
+    p_bench.add_argument("-ngl", "--ngl", type=int, default=None, help="GPU layers (-ngl).")
+    p_bench.add_argument(
+        "-fa", "--flash-attn", default=None, help="Flash attention on|off|auto (-fa)."
     )
     p_bench.add_argument("--binary", default=None, help="Path to llama-bench binary.")
     p_bench.add_argument(
