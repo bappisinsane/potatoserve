@@ -30,6 +30,32 @@ param(
 $ErrorActionPreference = "Stop"
 Set-Location -Path (Split-Path -Parent $PSScriptRoot)
 
+# --- Load the MSVC toolchain ---
+# cl.exe/nmake.exe live in the VS Build Tools but are NOT on PATH in a normal
+# shell. We must run inside the environment set up by vcvars64.bat. The cleanest
+# way from PowerShell is to re-exec this whole script inside cmd /c after
+# vcvars64, so cmake sees a fully populated cl/INCLUDE/LIB environment.
+if ($env:LLAMA_BUILD_IN_VCVARS -ne "1") {
+    $vsRoot = "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools"
+    $vcvars = Join-Path $vsRoot "VC\Auxiliary\Build\vcvars64.bat"
+    if (-not (Test-Path $vcvars)) {
+        # Fall back to vswhere so this also works for VS 2022 / other editions.
+        $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+        if (Test-Path $vswhere) {
+            $vsRoot = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+            $vcvars = Join-Path $vsRoot "VC\Auxiliary\Build\vcvars64.bat"
+        }
+    }
+    if (-not (Test-Path $vcvars)) {
+        throw "Could not find vcvars64.bat. Install the 'Desktop development with C++' workload (VS Build Tools), then retry."
+    }
+    Write-Host "Re-launching inside MSVC environment via vcvars64..." -ForegroundColor DarkCyan
+    $env:LLAMA_BUILD_IN_VCVARS = "1"
+    # Re-invoke under cmd so vcvars populates PATH/INCLUDE/LIB, then run this script again.
+    cmd /c "`"$vcvars`" >nul 2>&1 && powershell -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    exit $LASTEXITCODE
+}
+
 $llamaDir = (Resolve-Path (Join-Path $PSScriptRoot "..\third_party\llama.cpp")).Path
 $buildDir = Join-Path $llamaDir "build-vulkan"
 

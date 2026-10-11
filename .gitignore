@@ -19,6 +19,10 @@ runs/*
 # --- Regenerable detection output (the dev fingerprint lives in docs/memory.md) ---
 hardware.json
 
+# --- Models (downloaded locally for benchmarking; never committed) ---
+models/
+*.gguf
+
 # --- OS / editor ---
 .DS_Store
 Thumbs.db

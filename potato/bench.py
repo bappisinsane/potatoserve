@@ -47,6 +47,9 @@ def _find_llama_bench(explicit: Optional[str]) -> str:
         repo / "third_party/llama.cpp/build-vulkan/bin/llama-bench",
         repo / "third_party/llama.cpp/build/bin/llama-bench",
     ]
+    # On Windows the executable carries a .exe suffix.
+    if sys.platform.startswith("win"):
+        candidates = [Path(str(c) + ".exe") for c in candidates] + candidates
     for cand in candidates:
         if cand.exists():
             return str(cand)
@@ -117,6 +120,13 @@ def parse_llama_bench_json(stdout: str) -> Dict[str, Any]:
         out["avg"][kind] = row.get("avg_ts")
         out["stddev"][kind] = row.get("stddev_ts")
         out["samples"][kind] = row.get("samples_ts")
+        # Record the prompt/gen sizes actually used for each kind, so the
+        # result record's config reflects both the prefill and decode sizes
+        # (a single shared row would only carry one of them).
+        out.setdefault("sizes", {})[kind] = {
+            "n_prompt": row.get("n_prompt"),
+            "n_gen": row.get("n_gen"),
+        }
     if rows:
         meta = rows[0]
         out["meta"] = {
@@ -136,7 +146,49 @@ def parse_llama_bench_json(stdout: str) -> Dict[str, Any]:
     return out
 
 
-def result_from_bench(parsed: Dict[str, Any], run_id: str) -> ResultRecord:
+def _hardware_fingerprint() -> Optional[Dict[str, Any]]:
+    """Best-effort live hardware fingerprint (driver/OS) for result enrichment.
+
+    Uses potato.probe (stdlib only). Returns None if detection fails, so a
+    bench run still succeeds and simply records driver/os as null rather than
+    inventing values.
+    """
+    try:
+        from potato import probe
+
+        return probe.probe()
+    except Exception:
+        return None
+
+
+def _model_sha256(model_path: str, chunk: int = 1 << 20) -> Optional[str]:
+    """Compute the SHA-256 of the model file, or None if it can't be read.
+
+    Real value computed on the user's machine (never fabricated). Returns None
+    if the file is missing or unreadable so the caller records null.
+    """
+    import hashlib
+
+    p = Path(model_path)
+    if not p.is_file():
+        return None
+    h = hashlib.sha256()
+    with p.open("rb") as fh:
+        while True:
+            block = fh.read(chunk)
+            if not block:
+                break
+            h.update(block)
+    return h.hexdigest()
+
+
+def result_from_bench(
+    parsed: Dict[str, Any],
+    run_id: str,
+    driver: Optional[str] = None,
+    os_name: Optional[str] = None,
+    model_sha256: Optional[str] = None,
+) -> ResultRecord:
     """Build a section-8 ResultRecord from parsed llama-bench output.
 
     Only prefill/decode throughput are populated; the remaining section-8
@@ -158,14 +210,17 @@ def result_from_bench(parsed: Dict[str, Any], run_id: str) -> ResultRecord:
             "backends": meta.get("backends"),
             "repeats_default": DEFAULT_REPEATS,
         },
-        driver=None,  # populated by caller who has hardware.json, if available
-        os=None,
+        driver=driver,  # from hardware fingerprint (real detection), else None
+        os=os_name,
         gpu=meta.get("gpu_info"),
         model_id=meta.get("model_filename"),
-        model_sha256=None,  # optional; add a hashing step if required by spec
+        model_sha256=model_sha256,  # real SHA-256 of the model file, else None
         config={
-            "n_prompt": meta.get("n_prompt"),
-            "n_gen": meta.get("n_gen"),
+            # Prefill size from the prefill row, decode size from the decode row.
+            "n_prompt": parsed.get("sizes", {}).get("prefill", {}).get("n_prompt",
+                        meta.get("n_prompt")),
+            "n_gen": parsed.get("sizes", {}).get("decode", {}).get("n_gen",
+                        meta.get("n_gen")),
             "n_gpu_layers": meta.get("n_gpu_layers"),
             "flash_attn": meta.get("flash_attn"),
             "cache_type_k": meta.get("type_k"),
@@ -240,7 +295,22 @@ def run_baseline(
 
     parsed = parse_llama_bench_json(proc.stdout)
     rid = run_id or _dt.datetime.now(_dt.timezone.utc).strftime("baseline-%Y%m%dT%H%M%SZ")
-    record = result_from_bench(parsed, rid)
+    # Enrich with real detected values (never invented): driver + OS from the
+    # live hardware fingerprint, and the model's actual SHA-256.
+    fingerprint = _hardware_fingerprint()
+    driver = None
+    os_name = None
+    if fingerprint:
+        nvidia = fingerprint.get("gpu", {}).get("nvidia", {})
+        driver = nvidia.get("driver")
+        os_name = fingerprint.get("os", {}).get("platform")
+    record = result_from_bench(
+        parsed,
+        rid,
+        driver=driver,
+        os_name=os_name,
+        model_sha256=_model_sha256(model),
+    )
     path = write_record(record, results_dir)
     print(f"Wrote {path}")
     return path

@@ -37,6 +37,28 @@ param(
 $ErrorActionPreference = "Stop"
 Set-Location -Path (Split-Path -Parent $PSScriptRoot)
 
+# --- Load the MSVC toolchain ---
+# cl.exe/nmake.exe are not on PATH in a normal shell. Re-exec this script inside
+# the vcvars64 environment so cmake sees a fully populated cl/INCLUDE/LIB setup.
+if ($env:LLAMA_BUILD_IN_VCVARS -ne "1") {
+    $vsRoot = "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools"
+    $vcvars = Join-Path $vsRoot "VC\Auxiliary\Build\vcvars64.bat"
+    if (-not (Test-Path $vcvars)) {
+        $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+        if (Test-Path $vswhere) {
+            $vsRoot = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+            $vcvars = Join-Path $vsRoot "VC\Auxiliary\Build\vcvars64.bat"
+        }
+    }
+    if (-not (Test-Path $vcvars)) {
+        throw "Could not find vcvars64.bat. Install the 'Desktop development with C++' workload (VS Build Tools), then retry."
+    }
+    Write-Host "Re-launching inside MSVC environment via vcvars64..." -ForegroundColor DarkCyan
+    $env:LLAMA_BUILD_IN_VCVARS = "1"
+    cmd /c "`"$vcvars`" >nul 2>&1 && powershell -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    exit $LASTEXITCODE
+}
+
 $llamaDir = Join-Path $PSScriptRoot "..\third_party\llama.cpp"
 $llamaDir = (Resolve-Path $llamaDir).Path
 $buildDir = Join-Path $llamaDir "build-cuda"
