@@ -1,9 +1,10 @@
 """PotatoServe command-line interface (Phase 0).
 
 Implements the subset of the project-spec section 7 CLI contract that exists in
-Phase 0. Only ``potato probe`` is wired up now; the remaining commands
-(``quant``, ``bench``, ``agent-eval``, ``tune``, ``serve``, ``report``) are
-stubbed with clear "not yet implemented" messages so the surface is visible.
+Phase 0. ``potato probe`` (hardware fingerprint) and ``potato bench`` (baseline
+llama-bench run -> section-8 record) are wired up; the remaining commands
+(``quant``, ``agent-eval``, ``tune``, ``serve``, ``report``) are stubbed with
+clear "not yet implemented" messages so the surface is visible.
 
 Dependency policy (docs/rules.md): the project spec anticipates ``typer`` for
 the CLI, but no dependency may be added without owner approval. This dispatcher

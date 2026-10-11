@@ -16,6 +16,9 @@ venv/
 runs/*
 !runs/.gitkeep
 
+# --- Regenerable detection output (the dev fingerprint lives in docs/memory.md) ---
+hardware.json
+
 # --- OS / editor ---
 .DS_Store
 Thumbs.db
