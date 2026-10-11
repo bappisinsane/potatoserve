@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "potatoserve"
+version = "0.0.0"
+description = "Auto-tune llama.cpp for low-VRAM GPUs, with honest speed/memory/quality measurements."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "PotatoServe contributors" }]
+
+# Runtime dependencies are added only after owner approval (see rules).
+# The project spec (section 2) anticipates: typer, pydantic, matplotlib, jinja2.
+# Keep this empty until each one is explicitly approved.
+dependencies = []
+
+[project.optional-dependencies]
+dev = []
+
+[project.scripts]
+# Entry point wired up in Phase 0 step 3 (potato probe).
+# potato = "potato.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["potato*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

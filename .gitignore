@@ -1,0 +1,22 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Raw benchmark runs (regenerable; curated results live in results/) ---
+# Per project-spec.md section 9: runs/ holds gitignored raw output.
+runs/*
+!runs/.gitkeep
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+desktop.ini
