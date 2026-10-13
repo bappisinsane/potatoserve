@@ -10,9 +10,13 @@ Durations are estimates for focused part-time work; adjust after Phase 0.
 **Exit:** baseline table committed, reproducible by script.
 
 ## Phase 1 — Benchmark harness (≈ 1–2 weeks)
-- [ ] `probe`, `runner`, `bench` (speed + VRAM)
-- [ ] Results store + `report`
+- [x] `probe`, `runner`, `bench` (speed + VRAM)
+- [x] Results store + `report`
 **Exit:** `potato bench` produces a report with ≥ 3 repeats and spread.
+**Status (2026-10-13):** exit criterion met. `potato bench` launches via
+`potato.runner` (live `nvidia-smi` VRAM sampling), persists through the
+append-only `potato.store` (ADR-5), and prints a median+spread report; `potato
+report` renders stored records and A/B comparisons. 46 unit tests pass.
 
 ## Phase 2 — Quality gate (≈ 2 weeks)
 - [ ] Reference logits + KL/perplexity pipeline
