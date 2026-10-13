@@ -1,10 +1,11 @@
 """PotatoServe command-line interface (Phase 0).
 
 Implements the subset of the project-spec section 7 CLI contract that exists in
-Phase 0. ``potato probe`` (hardware fingerprint) and ``potato bench`` (baseline
-llama-bench run -> section-8 record) are wired up; the remaining commands
-(``quant``, ``agent-eval``, ``tune``, ``serve``, ``report``) are stubbed with
-clear "not yet implemented" messages so the surface is visible.
+Phase 1. ``potato probe`` (hardware fingerprint), ``potato bench`` (baseline
+llama-bench run with live VRAM sampling -> section-8 record) and ``potato
+report`` (median+spread reports and A/B comparison of stored records) are wired
+up; the remaining commands (``quant``, ``agent-eval``, ``tune``, ``serve``) are
+stubbed with clear "not yet implemented" messages so the surface is visible.
 
 Dependency policy (docs/rules.md): the project spec anticipates ``typer`` for
 the CLI, but no dependency may be added without owner approval. This dispatcher
@@ -23,7 +24,7 @@ COMMANDS = ["probe", "quant", "bench", "agent-eval", "tune", "serve", "report"]
 
 
 def _not_implemented(name: str) -> int:
-    print(f"potato {name}: not implemented yet (Phase 0). See docs/phases.md.")
+    print(f"potato {name}: not implemented yet. See docs/phases.md for the roadmap.")
     return 3
 
 
@@ -65,9 +66,45 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory to write the result record JSON (default: results).",
     )
     p_bench.add_argument("--run-id", default=None, help="Override the generated run id.")
+    p_bench.add_argument(
+        "--timeout",
+        type=float,
+        default=900.0,
+        help="Kill llama-bench after this many seconds (default: 900).",
+    )
+    p_bench.add_argument(
+        "--no-report",
+        action="store_true",
+        help="Store the record without printing the median+spread report.",
+    )
+
+    p_report = sub.add_parser(
+        "report",
+        help="Render stored records as median+spread reports / A/B comparisons.",
+    )
+    p_report.add_argument(
+        "--results-dir",
+        default="results",
+        help="Directory holding the result record JSON files (default: results).",
+    )
+    p_report.add_argument("--run-id", default=None, help="Report a single stored record.")
+    p_report.add_argument(
+        "--compare",
+        nargs=2,
+        metavar=("BASE", "CAND"),
+        help="Compare two stored records (base first, candidate second).",
+    )
+    p_report.add_argument(
+        "--metric",
+        default=None,
+        help="With --compare, restrict output to one metric (e.g. decode_tps).",
+    )
+    p_report.add_argument(
+        "--list", action="store_true", help="List stored run_ids and exit."
+    )
 
     for name in COMMANDS:
-        if name in ("probe", "bench"):
+        if name in ("probe", "bench", "report"):
             continue
         sub.add_parser(name, help=f"(not yet implemented) potato {name}")
 
@@ -106,11 +143,27 @@ def main(argv: Optional[List[str]] = None) -> int:
                 ngl=args.ngl,
                 flash_attn=args.flash_attn,
                 run_id=args.run_id,
+                timeout_s=args.timeout,
+                report=not args.no_report,
             )
         except (RuntimeError, ValueError) as exc:
             print(f"potato bench: {exc}", file=sys.stderr)
             return 1
         return 0
+
+    if args.command == "report":
+        from potato import report as report_mod
+
+        return report_mod.main(
+            [
+                "--results-dir",
+                args.results_dir,
+                *(["--run-id", args.run_id] if args.run_id else []),
+                *(["--compare", *args.compare] if args.compare else []),
+                *(["--metric", args.metric] if args.metric else []),
+                *(["--list"] if args.list else []),
+            ]
+        )
 
     return _not_implemented(args.command)
 

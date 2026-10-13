@@ -1,11 +1,16 @@
 """``potato bench`` baseline: run llama-bench and store a section-8 result record.
 
-Phase 0 scope (docs/phases.md): a *baseline* only. We measure the two
-throughputs llama-bench can produce — prefill (pp) and decode (tg) — with at
-least 3 repeats, plus the spread and per-repeat samples. The other section-8
-metrics (vram_peak_mb, kl_mean, top1_agree, ppl, agent_success) are produced by
-later phases (llama-server probe, perplexity, agent-eval); they stay ``null``
-here rather than being invented.
+Phase 0/1 scope (docs/phases.md): a *baseline*. We measure the two throughputs
+llama-bench can produce — prefill (pp) and decode (tg) — with at least 3
+repeats, plus the spread and per-repeat samples. Since Phase 1 the process is
+launched through ``potato.runner``, which samples ``nvidia-smi`` VRAM *during*
+the run, so ``vram_peak_mb`` is a real measurement rather than a guess; it stays
+``null`` when nvidia-smi is unavailable (honest "unknown", never fabricated).
+The remaining section-8 metrics (kl_mean, top1_agree, ppl, agent_success) are
+produced by later phases (perplexity, agent-eval); they stay ``null`` here.
+
+Records are persisted through ``potato.store``, which is APPEND-ONLY (ADR-5):
+re-running with an existing run_id refuses to clobber prior measured data.
 
 llama-bench output is parsed as JSON (``-o json``). The field mapping below was
 verified against the pinned third_party/llama.cpp @ v0.6.0 source and its
@@ -25,11 +30,13 @@ Standard library only (docs/rules.md).
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from potato import runner
+from potato import store as store_mod
+from potato.runner import DEFAULT_TIMEOUT_S
 from potato.schema import ResultRecord, new_record, validate
 
 DEFAULT_REPEATS = 3
@@ -188,11 +195,16 @@ def result_from_bench(
     driver: Optional[str] = None,
     os_name: Optional[str] = None,
     model_sha256: Optional[str] = None,
+    vram_peak_mb: Optional[int] = None,
+    vram_baseline_mb: Optional[int] = None,
+    vram_samples: Optional[int] = None,
+    bench_duration_s: Optional[float] = None,
 ) -> ResultRecord:
     """Build a section-8 ResultRecord from parsed llama-bench output.
 
-    Only prefill/decode throughput are populated; the remaining section-8
-    metrics stay null (Phase 0 baseline — no invention).
+    Prefill/decode throughput come from llama-bench; ``vram_peak_mb`` comes from
+    the live nvidia-smi sampling in ``potato.runner`` (None if it could not be
+    measured). The remaining section-8 metrics stay null (no invention).
     """
     meta = parsed.get("meta", {})
     avg = parsed.get("avg", {})
@@ -229,6 +241,9 @@ def result_from_bench(
         metrics={
             "prefill_tps": avg.get("prefill"),
             "decode_tps": avg.get("decode"),
+            # Measured live by potato.runner (nvidia-smi sampling during the
+            # run). None means "not measured", which is not the same as zero.
+            "vram_peak_mb": vram_peak_mb,
         },
         repeats=len(decode_samples) or len(prefill_samples) or None,
         spread={
@@ -238,6 +253,16 @@ def result_from_bench(
             "prefill_samples_ts": prefill_samples,
         },
     )
+    # Provenance for the VRAM number so the report can explain how it was
+    # obtained (and that it was measured, not assumed).
+    if record.config is not None:
+        record.config.update(
+            {
+                "vram_baseline_mb": vram_baseline_mb,
+                "vram_samples": vram_samples,
+                "bench_duration_s": bench_duration_s,
+            }
+        )
     # Preserve llama-bench's own timestamp if present.
     if meta.get("test_time"):
         record.date = meta["test_time"]
@@ -245,14 +270,16 @@ def result_from_bench(
 
 
 def write_record(record: ResultRecord, results_dir: Path) -> Path:
-    """Validate and write a result record as JSON under results_dir."""
+    """Validate and persist a result record via the append-only store (ADR-5).
+
+    Raises FileExistsError if ``<results_dir>/<run_id>.json`` already exists, so
+    a previously measured run can never be silently overwritten.
+    """
     problems = validate(record)
     if problems:
         raise ValueError(f"result record invalid: {problems}")
-    results_dir.mkdir(parents=True, exist_ok=True)
-    path = results_dir / f"{record.run_id}.json"
-    path.write_text(json.dumps(record.to_dict(), indent=2) + "\n", encoding="utf-8")
-    return path
+    path = store_mod.save_record(record.to_dict(), results_dir=str(results_dir))
+    return Path(path)
 
 
 def run_baseline(
@@ -265,12 +292,19 @@ def run_baseline(
     ngl: Optional[int] = None,
     flash_attn: Optional[str] = None,
     run_id: Optional[str] = None,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
+    report: bool = True,
 ) -> Path:
     """Run llama-bench once and persist a section-8 baseline record.
 
-    Returns the path written. Raises if llama-bench fails (no fabricated data).
+    The process is launched through ``potato.runner`` so peak VRAM is sampled
+    live from nvidia-smi during the run (null if unavailable). Returns the path
+    written. Raises if llama-bench fails or the record already exists (append-only
+    store, ADR-5) - no fabricated data.
     """
     import datetime as _dt
+
+    from potato import report as report_mod
 
     bin_path = _find_llama_bench(binary)
     cmd = build_bench_command(
@@ -278,7 +312,7 @@ def run_baseline(
     )
     print(">> " + " ".join(cmd))
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        run = runner.run_benchmark(cmd, timeout_s=timeout_s)
     except FileNotFoundError as exc:
         # llama-bench not found (not built, or not on PATH). Fail cleanly with
         # guidance — never fabricate a result (docs/rules.md).
@@ -288,12 +322,19 @@ def run_baseline(
             "scripts/build_vulkan.ps1, or pass --binary <path>. "
             "See docs/memory.md for the environment fingerprint."
         ) from exc
-    if proc.returncode != 0:
-        sys.stderr.write(proc.stdout)
-        sys.stderr.write(proc.stderr)
-        raise RuntimeError(f"llama-bench failed with exit code {proc.returncode}")
+    if run.timed_out:
+        sys.stderr.write(run.stdout or "")
+        sys.stderr.write(run.stderr or "")
+        raise RuntimeError(
+            f"llama-bench timed out after {timeout_s:g}s (partial output above). "
+            "A first-time backend build/load can be slow; raise --timeout."
+        )
+    if run.exit_code != 0:
+        sys.stderr.write(run.stdout)
+        sys.stderr.write(run.stderr)
+        raise RuntimeError(f"llama-bench failed with exit code {run.exit_code}")
 
-    parsed = parse_llama_bench_json(proc.stdout)
+    parsed = parse_llama_bench_json(run.stdout)
     rid = run_id or _dt.datetime.now(_dt.timezone.utc).strftime("baseline-%Y%m%dT%H%M%SZ")
     # Enrich with real detected values (never invented): driver + OS from the
     # live hardware fingerprint, and the model's actual SHA-256.
@@ -310,7 +351,32 @@ def run_baseline(
         driver=driver,
         os_name=os_name,
         model_sha256=_model_sha256(model),
+        vram_peak_mb=run.vram_peak_mb,
+        vram_baseline_mb=run.vram_baseline_mb,
+        vram_samples=run.vram_samples,
+        bench_duration_s=run.duration_s,
     )
-    path = write_record(record, results_dir)
+    try:
+        path = write_record(record, results_dir)
+    except FileExistsError as exc:
+        raise RuntimeError(
+            f"{exc} Re-run with --run-id <fresh-id> to supersede rather than "
+            "overwrite (ADR-5: results are append-only)."
+        ) from exc
     print(f"Wrote {path}")
+    if run.vram_peak_mb is None:
+        print(
+            "note: peak VRAM not measured (nvidia-smi unavailable); "
+            "vram_peak_mb recorded as null rather than guessed."
+        )
+    else:
+        print(
+            f"VRAM: peak {run.vram_peak_mb} MiB "
+            f"(baseline {run.vram_baseline_mb} MiB, "
+            f"delta {run.vram_delta_mb} MiB, {run.vram_samples} samples)"
+        )
+    if report:
+        # Phase 1 exit criterion: the bench emits a median+spread report.
+        print()
+        print(report_mod.render_record_report(record.to_dict()))
     return path
