@@ -36,12 +36,17 @@ METRIC_LABELS: Dict[str, str] = {
 
 # Where a metric's per-repeat samples live inside a record's ``spread`` dict.
 # ``potato.bench`` (llama-bench) stores them as ``prefill_samples_ts`` /
-# ``decode_samples_ts``. A different writer may instead store a ready-made
-# ``{median, stdev, min, max, n}`` dict keyed by the metric name itself; both
-# layouts are honoured, in that order, by ``_metric_summary_from_record``.
+# ``decode_samples_ts``; ``potato.quality`` stores ``kl_samples`` /
+# ``top1_samples`` / ``ppl_samples``. A different writer may instead store a
+# ready-made ``{median, stdev, min, max, n}`` dict keyed by the metric name
+# itself; both layouts are honoured, in that order, by
+# ``_metric_summary_from_record``.
 SAMPLE_KEYS: Dict[str, str] = {
     "prefill_tps": "prefill_samples_ts",
     "decode_tps": "decode_samples_ts",
+    "kl_mean": "kl_samples",
+    "top1_agree": "top1_samples",
+    "ppl": "ppl_samples",
 }
 
 # Metrics where a SMALLER number is the better outcome (drives verdict wording).
@@ -205,6 +210,64 @@ def render_comparison(
     return "\n".join(lines)
 
 
+def _curve_cell(record: Dict[str, Any], metric: str) -> str:
+    """``median+-stdev (n)`` for a metric, or an honest placeholder."""
+    s = _metric_summary_from_record(record, metric)
+    if s["n"] == 0 or s["median"] is None:
+        return "not measured"
+    if s["n"] == 1 or s["stdev"] is None:
+        return f"{_fmt(s['median'])} (n=1)"
+    return f"{_fmt(s['median'])}±{_fmt(s['stdev'])} (n={s['n']})"
+
+
+def render_curve(records: List[Dict[str, Any]]) -> str:
+    """Quality-vs-size curve as a text table (Phase 2 exit artifact).
+
+    One row per stored record carrying ``config.model_size_bytes``, sorted by
+    size ascending, with the quality metrics that were actually measured
+    (median +- spread from the per-repeat samples). Records without a size are
+    listed below as "off-curve" rather than dropped, and unmeasured cells say
+    so - no numbers are invented (docs/rules.md).
+    """
+    sized = [
+        r for r in records
+        if isinstance((r.get("config") or {}).get("model_size_bytes"), (int, float))
+    ]
+    off_curve = [r for r in records if r not in sized]
+    sized.sort(key=lambda r: r["config"]["model_size_bytes"])
+
+    lines = [
+        "PotatoServe quality-vs-size curve",
+        "=" * 100,
+        f"{'model':40s} {'size MiB':>9s} {'ppl':>24s} {'kl_mean':>20s} "
+        f"{'top1_agree':>16s}",
+        "-" * 100,
+    ]
+    for rec in sized:
+        size_mib = rec["config"]["model_size_bytes"] / (1024 * 1024)
+        model = rec.get("model_id") or rec.get("run_id") or "?"
+        if len(model) > 40:
+            model = "..." + model[-37:]
+        lines.append(
+            f"{model:40s} {size_mib:9.1f} "
+            f"{_curve_cell(rec, 'ppl'):>24s} "
+            f"{_curve_cell(rec, 'kl_mean'):>20s} "
+            f"{_curve_cell(rec, 'top1_agree'):>16s}"
+        )
+    lines.append("")
+    lines.append(
+        "Read: lower ppl / kl_mean is better; top1_agree closer to 1.0 is "
+        "better. Values are medians with population stdev over repeats; a "
+        "single repeat is marked n=1 (spec wants >= 3)."
+    )
+    if off_curve:
+        lines.append(
+            f"off-curve (no config.model_size_bytes): "
+            f"{', '.join(r.get('run_id', '?') for r in off_curve)}"
+        )
+    return "\n".join(lines)
+
+
 def bands_overlap(
     a: Dict[str, Optional[float]], b: Dict[str, Optional[float]]
 ) -> bool:
@@ -323,6 +386,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument(
         "--list", action="store_true", help="List stored run_ids and exit."
     )
+    parser.add_argument(
+        "--curve", action="store_true",
+        help="Render the quality-vs-size curve (Phase 2 exit artifact).",
+    )
     args = parser.parse_args(sys.argv[1:] if argv is None else list(argv))
 
     if args.metric is not None and args.metric not in METRIC_FIELDS:
@@ -354,6 +421,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(render_comparison(base, cand, args.metric))
         else:
             print(render_compare_all(base, cand))
+        return 0
+
+    if args.curve:
+        records = store.load_all(args.results_dir)
+        if not records:
+            print(f"no stored records in {args.results_dir}")
+            return 1
+        print(render_curve(records))
         return 0
 
     if args.run_id:

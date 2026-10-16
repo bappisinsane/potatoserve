@@ -34,6 +34,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from potato import quality as quality_mod
 from potato import runner
 from potato import store as store_mod
 from potato.runner import DEFAULT_TIMEOUT_S
@@ -294,68 +295,190 @@ def run_baseline(
     run_id: Optional[str] = None,
     timeout_s: float = DEFAULT_TIMEOUT_S,
     report: bool = True,
-) -> Path:
-    """Run llama-bench once and persist a section-8 baseline record.
+    # --- Phase 2 quality gate (FR-3: bench also measures quality) ---
+    corpus: Optional[str] = None,
+    kl_base: Optional[str] = None,
+    save_kl_base: bool = False,
+    chunks: Optional[int] = None,
+    quality_repeats: int = quality_mod.DEFAULT_REPEATS,
+    quality_only: bool = False,
+    quality_ctx: int = quality_mod.DEFAULT_CTX,
+    quality_binary: Optional[str] = None,
+    dry_run: bool = False,
+) -> Optional[Path]:
+    """Run llama-bench (speed + VRAM) and/or llama-perplexity (quality).
 
-    The process is launched through ``potato.runner`` so peak VRAM is sampled
-    live from nvidia-smi during the run (null if unavailable). Returns the path
-    written. Raises if llama-bench fails or the record already exists (append-only
-    store, ADR-5) - no fabricated data.
+    Speed is measured through ``potato.runner`` (live nvidia-smi VRAM sampling;
+    null if unavailable). With ``corpus`` set, quality is measured too, per PRD
+    FR-3:
+
+      * ``corpus`` only                -> perplexity (KL stays null: unknown)
+      * ``corpus`` + ``kl_base``       -> KL + top-1 agreement vs an existing
+                                          reference logits file (``mode="kl"``)
+      * ``corpus`` + ``kl_base`` + ``save_kl_base``
+                                        -> *write* the reference logits file
+                                          (``mode="reference"``, use the
+                                          highest-precision model, usually CPU)
+      * ``quality_only=True``          -> skip llama-bench entirely (the
+                                          reference phase only needs quality)
+
+    ``dry_run=True`` prints the exact commands and writes nothing.
+
+    Returns the path written, or None on dry_run. Raises on any tool failure
+    or an existing run_id (append-only store, ADR-5) - no fabricated data.
     """
     import datetime as _dt
 
     from potato import report as report_mod
 
+    if quality_only and not corpus:
+        raise ValueError("--quality-only requires --corpus <text file>")
+    if save_kl_base and not corpus:
+        raise ValueError("--save-kl-base requires --corpus <text file>")
+
+    mode: Optional[str] = None
+    if corpus:
+        if save_kl_base:
+            if not kl_base:
+                raise ValueError(
+                    "--save-kl-base requires --kl-base <output.kld> "
+                    "(the reference logits file to write)"
+                )
+            mode = "reference"
+        elif kl_base:
+            mode = "kl"
+        else:
+            mode = "plain"
+
     bin_path = _find_llama_bench(binary)
     cmd = build_bench_command(
         bin_path, model, repeats=repeats, pp=pp, tg=tg, ngl=ngl, flash_attn=flash_attn
     )
-    print(">> " + " ".join(cmd))
-    try:
-        run = runner.run_benchmark(cmd, timeout_s=timeout_s)
-    except FileNotFoundError as exc:
-        # llama-bench not found (not built, or not on PATH). Fail cleanly with
-        # guidance — never fabricate a result (docs/rules.md).
-        raise RuntimeError(
-            f"llama-bench executable not found at '{bin_path}'. Build it first: "
-            "scripts/build_cuda.ps1 (needs the CUDA Toolkit) or "
-            "scripts/build_vulkan.ps1, or pass --binary <path>. "
-            "See docs/memory.md for the environment fingerprint."
-        ) from exc
-    if run.timed_out:
-        sys.stderr.write(run.stdout or "")
-        sys.stderr.write(run.stderr or "")
-        raise RuntimeError(
-            f"llama-bench timed out after {timeout_s:g}s (partial output above). "
-            "A first-time backend build/load can be slow; raise --timeout."
-        )
-    if run.exit_code != 0:
-        sys.stderr.write(run.stdout)
-        sys.stderr.write(run.stderr)
-        raise RuntimeError(f"llama-bench failed with exit code {run.exit_code}")
+    if dry_run:
+        if not quality_only:
+            print(">> " + " ".join(cmd))
+        if corpus:
+            pcmd = quality_mod.build_perplexity_command(
+                runner.find_llama_binary("llama-perplexity", quality_binary),
+                model, corpus,
+                kl_base=kl_base if mode in ("reference", "kl") else None,
+                kl_divergence=(mode == "kl"),
+                chunks=chunks, ngl=ngl, ctx=quality_ctx,
+            )
+            print(">> " + " ".join(pcmd))
+        return None
 
-    parsed = parse_llama_bench_json(run.stdout)
+    # --- Speed phase (skipped by --quality-only) ---------------------------
+    run = None
+    parsed = None
+    if not quality_only:
+        print(">> " + " ".join(cmd))
+        try:
+            run = runner.run_benchmark(cmd, timeout_s=timeout_s)
+        except FileNotFoundError as exc:
+            # llama-bench not found (not built, or not on PATH). Fail cleanly
+            # with guidance - never fabricate a result (docs/rules.md).
+            raise RuntimeError(
+                f"llama-bench executable not found at '{bin_path}'. Build it "
+                "first: scripts/build_cuda.ps1 (needs the CUDA Toolkit) or "
+                "scripts/build_vulkan.ps1, or pass --binary <path>. "
+                "See docs/memory.md for the environment fingerprint."
+            ) from exc
+        if run.timed_out:
+            sys.stderr.write(run.stdout or "")
+            sys.stderr.write(run.stderr or "")
+            raise RuntimeError(
+                f"llama-bench timed out after {timeout_s:g}s (partial output "
+                "above). A first-time backend build/load can be slow; raise "
+                "--timeout."
+            )
+        if run.exit_code != 0:
+            sys.stderr.write(run.stdout)
+            sys.stderr.write(run.stderr)
+            raise RuntimeError(
+                f"llama-bench failed with exit code {run.exit_code}"
+            )
+        parsed = parse_llama_bench_json(run.stdout)
     rid = run_id or _dt.datetime.now(_dt.timezone.utc).strftime("baseline-%Y%m%dT%H%M%SZ")
     # Enrich with real detected values (never invented): driver + OS from the
     # live hardware fingerprint, and the model's actual SHA-256.
     fingerprint = _hardware_fingerprint()
     driver = None
     os_name = None
+    gpu_name = None
     if fingerprint:
         nvidia = fingerprint.get("gpu", {}).get("nvidia", {})
         driver = nvidia.get("driver")
         os_name = fingerprint.get("os", {}).get("platform")
-    record = result_from_bench(
-        parsed,
-        rid,
-        driver=driver,
-        os_name=os_name,
-        model_sha256=_model_sha256(model),
-        vram_peak_mb=run.vram_peak_mb,
-        vram_baseline_mb=run.vram_baseline_mb,
-        vram_samples=run.vram_samples,
-        bench_duration_s=run.duration_s,
-    )
+        gpu_name = nvidia.get("name")
+    model_path = Path(model)
+    model_bytes = model_path.stat().st_size if model_path.is_file() else None
+
+    # --- Quality phase (FR-3: KL / top-1 / perplexity) ---------------------
+    qres = None
+    if corpus:
+        qres = quality_mod.run_quality(
+            model, corpus, mode=mode, kl_base=kl_base,
+            repeats=quality_repeats, chunks=chunks, ngl=ngl,
+            ctx=quality_ctx, binary=quality_binary, timeout_s=timeout_s,
+        )
+    quality_cfg: Dict[str, Any] = {}
+    if qres is not None:
+        quality_cfg = {
+            "corpus": corpus,
+            "chunks": chunks,
+            "kl_base": kl_base,
+            "kl_mode": mode,
+            "quality_repeats": qres.repeats,
+            "quality_duration_s": qres.duration_s,
+            "quality_ctx": quality_ctx,
+        }
+
+    if quality_only:
+        record = new_record(
+            rid,
+            llama_cpp_commit=runner.pinned_commit(),
+            build_flags={"tool": "llama-perplexity", "quality_mode": mode},
+            driver=driver,
+            os=os_name,
+            gpu=gpu_name,
+            model_id=model,
+            model_sha256=_model_sha256(model),
+            config={"model_size_bytes": model_bytes, **quality_cfg},
+            metrics={
+                "kl_mean": qres.metrics["kl_mean"],
+                "top1_agree": qres.metrics["top1_agree"],
+                "ppl": qres.metrics["ppl"],
+                # Sampled live during the perplexity pass (null if no nvidia-smi).
+                "vram_peak_mb": qres.vram_peak_mb,
+            },
+            repeats=qres.repeats,
+            spread=qres.spread,
+        )
+    else:
+        record = result_from_bench(
+            parsed,
+            rid,
+            driver=driver,
+            os_name=os_name,
+            model_sha256=_model_sha256(model),
+            vram_peak_mb=run.vram_peak_mb,
+            vram_baseline_mb=run.vram_baseline_mb,
+            vram_samples=run.vram_samples,
+            bench_duration_s=run.duration_s,
+        )
+        if record.config is None:
+            record.config = {}
+        record.config["model_size_bytes"] = model_bytes
+        record.config.update(quality_cfg)
+        if qres is not None:
+            # Merge quality into the speed record: metrics carry the medians,
+            # spread keeps every per-repeat sample for the spread report.
+            record.metrics.update(qres.metrics)
+            merged_spread = dict(record.spread or {})
+            merged_spread.update(qres.spread)
+            record.spread = merged_spread
+
     try:
         path = write_record(record, results_dir)
     except FileExistsError as exc:
@@ -364,19 +487,32 @@ def run_baseline(
             "overwrite (ADR-5: results are append-only)."
         ) from exc
     print(f"Wrote {path}")
-    if run.vram_peak_mb is None:
+
+    vram_val = record.metrics.get("vram_peak_mb")
+    if vram_val is None:
         print(
             "note: peak VRAM not measured (nvidia-smi unavailable); "
             "vram_peak_mb recorded as null rather than guessed."
         )
-    else:
+    elif run is not None:
         print(
-            f"VRAM: peak {run.vram_peak_mb} MiB "
+            f"VRAM: peak {vram_val} MiB "
             f"(baseline {run.vram_baseline_mb} MiB, "
             f"delta {run.vram_delta_mb} MiB, {run.vram_samples} samples)"
         )
+    else:
+        print(f"VRAM: peak {vram_val} MiB (sampled during llama-perplexity)")
+    if qres is not None:
+        measured = ", ".join(
+            f"{key}={value}"
+            for key, value in qres.metrics.items()
+            if value is not None
+        ) or "no metrics in output"
+        print(f"Quality ({qres.mode}, n={qres.repeats}): {measured}")
+        if qres.mode == "reference":
+            print(f"Reference logits written to {kl_base} - use it as "
+                  "--kl-base for every candidate on the same corpus/chunks.")
     if report:
-        # Phase 1 exit criterion: the bench emits a median+spread report.
         print()
         print(report_mod.render_record_report(record.to_dict()))
     return path

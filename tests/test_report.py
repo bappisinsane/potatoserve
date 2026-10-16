@@ -19,6 +19,7 @@ from potato.report import (
     summarize_samples,
     _metric_summary_from_record,
     render_compare_all,
+    render_curve,
     render_record_report,
 )
 
@@ -159,6 +160,79 @@ class RenderTest(unittest.TestCase):
         self.assertIn("within noise", text)
         self.assertIn("Decode throughput", text)
         self.assertIn("incomparable", text)  # the null metrics
+
+
+class QualityMetricSpreadTest(unittest.TestCase):
+    """Phase 2: kl/top1/ppl carry per-repeat samples like the speed metrics."""
+
+    QUALITY_RECORD = {
+        "run_id": "qual-001",
+        "model_id": "models/qwen-Q4_K_M.gguf",
+        "config": {"model_size_bytes": 350 * 1024 * 1024, "kl_mode": "kl"},
+        "metrics": {"ppl": 6.23, "kl_mean": 0.000025, "top1_agree": 0.9974},
+        "spread": {
+            "kl_samples": [0.000030, 0.000025, 0.000020],
+            "ppl_samples": [6.20, 6.23, 6.26],
+            "top1_samples": [0.9970, 0.9974, 0.9978],
+        },
+    }
+
+    def test_kl_summary_reads_samples(self) -> None:
+        s = _metric_summary_from_record(self.QUALITY_RECORD, "kl_mean")
+        self.assertEqual(s["n"], 3)
+        self.assertAlmostEqual(s["median"], 0.000025)
+        self.assertGreater(s["stdev"], 0.0)
+
+    def test_ppl_summary_reads_samples(self) -> None:
+        s = _metric_summary_from_record(self.QUALITY_RECORD, "ppl")
+        self.assertEqual(s["n"], 3)
+        self.assertAlmostEqual(s["median"], 6.23)
+
+    def test_top1_summary_reads_samples(self) -> None:
+        s = _metric_summary_from_record(self.QUALITY_RECORD, "top1_agree")
+        self.assertEqual(s["n"], 3)
+        self.assertAlmostEqual(s["median"], 0.9974)
+
+
+class RenderCurveTest(unittest.TestCase):
+    """The Phase 2 exit artifact: quality-vs-size table over stored records."""
+
+    def _record(self, run_id: str, model: str, size: int, ppl: object,
+                kl: object, top1: object) -> dict:
+        return {
+            "run_id": run_id,
+            "model_id": model,
+            "config": {"model_size_bytes": size},
+            "metrics": {"ppl": ppl, "kl_mean": kl, "top1_agree": top1},
+            "spread": {},
+        }
+
+    def test_rows_sorted_by_size_ascending(self) -> None:
+        big = self._record("r-big", "m-Q3_K_M", 400_000_000, 7.1, None, None)
+        small = self._record("r-small", "m-Q6_K", 300_000_000, 6.2, None, None)
+        text = render_curve([big, small])  # deliberately unsorted input
+        self.assertLess(text.index("Q6_K"), text.index("Q3_K_M"))
+
+    def test_unmeasured_cells_say_so(self) -> None:
+        rec = self._record("r1", "m.gguf", 100_000_000, None, None, None)
+        text = render_curve([rec])
+        self.assertIn("not measured", text)
+        self.assertIn("m.gguf", text)
+
+    def test_off_curve_records_are_listed_not_dropped(self) -> None:
+        rec = self._record("on", "m.gguf", 100_000_000, 6.2, None, None)
+        off = {"run_id": "orphan-001", "metrics": {}, "spread": {}}
+        text = render_curve([rec, off])
+        self.assertIn("off-curve", text)
+        self.assertIn("orphan-001", text)
+
+    def test_median_stdev_shown_when_samples_present(self) -> None:
+        rec = self._record("r1", "m.gguf", 100_000_000, None, None, None)
+        rec["spread"] = {"ppl_samples": [6.20, 6.23, 6.26]}
+        rec["metrics"]["ppl"] = 6.23
+        text = render_curve([rec])
+        self.assertIn("n=3", text)
+        self.assertIn("6.23", text)
 
 
 if __name__ == "__main__":
