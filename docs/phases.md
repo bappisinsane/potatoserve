@@ -19,10 +19,17 @@ append-only `potato.store` (ADR-5), and prints a median+spread report; `potato
 report` renders stored records and A/B comparisons. 46 unit tests pass.
 
 ## Phase 2 — Quality gate (≈ 2 weeks)
-- [ ] Reference logits + KL/perplexity pipeline
-- [ ] `quant` with imatrix variants
+- [x] Reference logits + KL/perplexity pipeline
+- [x] `quant` with imatrix variants
 - [ ] Decide KL threshold from data (plot KL vs. agent success on a small sample)
 **Exit:** quality-vs-size curve for both models.
+**Status (2026-10-16):** code complete — `potato bench --corpus [--kl-base]`
+runs llama-perplexity (reference / KL modes, ≥3 repeats, live VRAM sampling
+during the pass), `potato quant` builds imatrix-variant GGUFs +
+`quant_manifest.json`, and `potato report --curve` renders the quality-vs-size
+table. 89 unit tests pass (stdlib only). The measurement-dependent items (KL
+threshold decision, curve for both models) **await GPU runs** — exact commands
+in `memory.md`; no numbers were fabricated.
 
 ## Phase 3 — Agent-eval (≈ 2 weeks)
 - [ ] 50-task suite + checkers; validate checkers with a strong reference model
