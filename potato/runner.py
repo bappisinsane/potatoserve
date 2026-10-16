@@ -17,13 +17,63 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List, Optional
 
 DEFAULT_SAMPLE_INTERVAL_S = 0.05
 DEFAULT_TIMEOUT_S = 1800  # 30 min; first-time backend builds/loads can be slow.
+
+
+def find_llama_binary(name: str, explicit: Optional[str] = None) -> str:
+    """Resolve a pinned llama.cpp tool binary: explicit path, else build dirs.
+
+    *name* is the tool (e.g. ``"llama-perplexity"``). Search order matches the
+    build scripts: ``build-cuda``, ``build-vulkan``, ``build`` under the
+    vendored ``third_party/llama.cpp``, then PATH as a last resort (the caller
+    turns a FileNotFoundError into guidance - nothing is ever faked).
+    """
+    if explicit:
+        return explicit
+    repo = Path(__file__).resolve().parents[1]
+    candidates = [
+        repo / f"third_party/llama.cpp/build-cuda/bin/{name}",
+        repo / f"third_party/llama.cpp/build-vulkan/bin/{name}",
+        repo / f"third_party/llama.cpp/build/bin/{name}",
+    ]
+    # On Windows the executable carries a .exe suffix.
+    if sys.platform.startswith("win"):
+        candidates = [Path(str(c) + ".exe") for c in candidates] + candidates
+    for cand in candidates:
+        if cand.exists():
+            return str(cand)
+    return name  # fall back to PATH; missing tools fail loudly at exec time
+
+
+def pinned_commit() -> Optional[str]:
+    """Short commit of the vendored llama.cpp submodule (best effort).
+
+    Read from git directly so records/manifests can state the pinned
+    provenance (same command CMake's build-info uses: ``git rev-parse --short
+    HEAD``); None when git is unavailable - never guessed.
+    """
+    import subprocess
+
+    repo = Path(__file__).resolve().parents[1] / "third_party" / "llama.cpp"
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=10, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip() or None
 
 
 @dataclass
@@ -127,7 +177,8 @@ def run_benchmark(
     start = time.monotonic()
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout_s, check=False
+            cmd, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=timeout_s, check=False,
         )
         stdout, stderr, code = proc.stdout, proc.stderr, proc.returncode
     except subprocess.TimeoutExpired as exc:
