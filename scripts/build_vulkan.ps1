@@ -92,7 +92,7 @@ Write-Host "`n>> cmake $($cmakeArgs -join ' ')" -ForegroundColor Yellow
 cmake @cmakeArgs
 if ($LASTEXITCODE -ne 0) { throw "CMake configure failed (exit $LASTEXITCODE)" }
 
-$buildArgs = @("--build", $buildDir, "--config", $Config, "--target", "llama-bench", "llama-server", "llama-perplexity")
+$buildArgs = @("--build", $buildDir, "--config", $Config, "--target", "llama-bench", "llama-server", "llama-perplexity", "llama-quantize", "llama-imatrix")
 
 Write-Host "`n>> cmake $($buildArgs -join ' ')" -ForegroundColor Yellow
 cmake @buildArgs

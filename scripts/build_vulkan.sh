@@ -31,7 +31,7 @@ cmake -S "$LLAMA_DIR" -B "$BUILD_DIR" -G "$GENERATOR" \
   -DGGML_NATIVE=OFF \
   -DLLAMA_CURL=OFF
 
-cmake --build "$BUILD_DIR" --target llama-bench llama-server llama-perplexity
+cmake --build "$BUILD_DIR" --target llama-bench llama-server llama-perplexity llama-quantize llama-imatrix
 
 echo "== Build complete =="
 echo "Binaries in: $BUILD_DIR/bin"

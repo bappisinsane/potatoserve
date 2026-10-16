@@ -11,7 +11,7 @@ below are verified against that pinned source, not memory.
 | `build_cuda.sh` / `build_cuda.ps1` | CUDA | `CMAKE_CUDA_ARCHITECTURES=75` (GTX 1660 Ti, TU116 Turing). `GGML_CUDA=ON`, `GGML_NATIVE=OFF`. |
 | `build_vulkan.sh` / `build_vulkan.ps1` | Vulkan | `GGML_VULKAN=ON`. Portable to AMD/Intel GPUs. Needs Vulkan SDK (`glslc`) for shader-gen. |
 
-Targets built: `llama-bench`, `llama-server`, `llama-perplexity`.
+Targets built: `llama-bench`, `llama-server`, `llama-perplexity`, `llama-quantize`, `llama-imatrix`.
 
 ## Verified flags (pinned v0.6.0)
 - **llama-bench**: `-r/--repetitions` (default **5** — always pass `-r 3`),

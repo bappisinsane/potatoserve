@@ -101,9 +101,9 @@ Write-Host "`n>> cmake $($cmakeArgs -join ' ')" -ForegroundColor Yellow
 cmake @cmakeArgs
 if ($LASTEXITCODE -ne 0) { throw "CMake configure failed (exit $LASTEXITCODE)" }
 
-# --- Build (targets we actually use in Phase 0/1) ---
-$buildArgs = @("--build", $buildDir, "--config", $Config, "--target", "llama-bench", "llama-server", "llama-perplexity")
-if ($Generator -eq "Ninja") { $buildArgs = @("--build", $buildDir, "--target", "llama-bench", "llama-server", "llama-perplexity") }
+# --- Build (targets we actually use in Phase 0-2) ---
+$buildArgs = @("--build", $buildDir, "--config", $Config, "--target", "llama-bench", "llama-server", "llama-perplexity", "llama-quantize", "llama-imatrix")
+if ($Generator -eq "Ninja") { $buildArgs = @("--build", $buildDir, "--target", "llama-bench", "llama-server", "llama-perplexity", "llama-quantize", "llama-imatrix") }
 
 Write-Host "`n>> cmake $($buildArgs -join ' ')" -ForegroundColor Yellow
 cmake @buildArgs
