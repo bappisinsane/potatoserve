@@ -23,7 +23,7 @@ from typing import List, Optional
 COMMANDS = ["probe", "quant", "bench", "agent-eval", "tune", "serve", "report"]
 
 # Subcommands that have real implementations.
-IMPLEMENTED = ("probe", "quant", "bench", "report")
+IMPLEMENTED = ("probe", "quant", "bench", "report", "agent-eval")
 
 
 def _not_implemented(name: str) -> int:
@@ -79,6 +79,28 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-report",
         action="store_true",
         help="Store the record without printing the median+spread report.",
+    )
+    # Phase 3 agent-eval (spec section 6): run the task suite after speed+quality.
+    p_bench.add_argument(
+        "--agent-endpoint", default=None,
+        help="Also run the agent-eval suite against this llama-server base URL "
+             "(e.g. http://127.0.0.1:8080) and record agent_success.",
+    )
+    p_bench.add_argument(
+        "--agent-tasks", default=None,
+        help="Agent task directory (default: evals/agent_tasks/tasks).",
+    )
+    p_bench.add_argument(
+        "--agent-repeats", type=int, default=1,
+        help="Full agent suite repeats (spec: >= 3 for trustworthy spread).",
+    )
+    p_bench.add_argument(
+        "--agent-temperature", type=float, default=0.0,
+        help="Sampling temperature for agent-eval (default 0 = reproducible).",
+    )
+    p_bench.add_argument(
+        "--agent-max-steps", type=int, default=None,
+        help="Override every agent task's step budget (default: per-task value).",
     )
     # Phase 2 quality gate (FR-3): llama-perplexity runs alongside llama-bench.
     p_bench.add_argument(
@@ -232,6 +254,51 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print the exact commands and exit without writing anything.",
     )
 
+    p_agent = sub.add_parser(
+        "agent-eval",
+        help="Run the 50-task agent suite against llama-server (spec section 6).",
+    )
+    p_agent.add_argument(
+        "--endpoint", default=None,
+        help="Base URL of llama-server, e.g. http://127.0.0.1:8080 (required unless --dry-run).",
+    )
+    p_agent.add_argument(
+        "--tasks-dir", default=None,
+        help="Task JSON directory (default: evals/agent_tasks/tasks).",
+    )
+    p_agent.add_argument(
+        "--results-dir", default="results",
+        help="Directory to write the result record JSON (default: results).",
+    )
+    p_agent.add_argument("--run-id", default=None, help="Override the generated run id.")
+    p_agent.add_argument(
+        "--repeats", type=int, default=1,
+        help="Full suite repeats (spec: >= 3 for trustworthy spread).",
+    )
+    p_agent.add_argument(
+        "--category", default=None,
+        choices=["error_recovery", "file_edit", "search", "shell", "tool_call"],
+        help="Run only one category (debug / partial runs).",
+    )
+    p_agent.add_argument("--limit", type=int, default=None, help="First N tasks only (debug).")
+    p_agent.add_argument(
+        "--temperature", type=float, default=0.0,
+        help="Sampling temperature (default 0; >0 for the robustness run).",
+    )
+    p_agent.add_argument("--seed", type=int, default=42, help="Request seed (default 42).")
+    p_agent.add_argument("--max-steps", type=int, default=None, help="Override task step budgets.")
+    p_agent.add_argument(
+        "--chat-timeout", type=float, default=120.0, help="Per-request timeout (seconds).",
+    )
+    p_agent.add_argument(
+        "--tool-timeout", type=float, default=30.0, help="Per run_shell timeout (seconds).",
+    )
+    p_agent.add_argument(
+        "--dry-run", action="store_true",
+        help="Validate + print the suite plan; no HTTP requests, no writes.",
+    )
+
+
     for name in COMMANDS:
         if name in IMPLEMENTED:
             continue
@@ -283,6 +350,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                 quality_ctx=args.quality_ctx,
                 quality_binary=args.quality_binary,
                 dry_run=args.dry_run,
+                agent_endpoint=args.agent_endpoint,
+                agent_tasks=args.agent_tasks,
+                agent_repeats=args.agent_repeats,
+                agent_temperature=args.agent_temperature,
+                agent_max_steps=args.agent_max_steps,
             )
         except (RuntimeError, ValueError) as exc:
             print(f"potato bench: {exc}", file=sys.stderr)
@@ -332,6 +404,34 @@ def main(argv: Optional[List[str]] = None) -> int:
                 *(["--curve"] if args.curve else []),
             ]
         )
+
+    if args.command == "agent-eval":
+        from potato import agenteval as agent_mod
+
+        argv_inner = []
+        if args.endpoint:
+            argv_inner += ["--endpoint", args.endpoint]
+        if args.tasks_dir:
+            argv_inner += ["--tasks-dir", args.tasks_dir]
+        argv_inner += ["--results-dir", args.results_dir]
+        if args.run_id:
+            argv_inner += ["--run-id", args.run_id]
+        argv_inner += ["--repeats", str(args.repeats)]
+        if args.category:
+            argv_inner += ["--category", args.category]
+        if args.limit is not None:
+            argv_inner += ["--limit", str(args.limit)]
+        argv_inner += [
+            "--temperature", str(args.temperature),
+            "--seed", str(args.seed),
+            "--chat-timeout", str(args.chat_timeout),
+            "--tool-timeout", str(args.tool_timeout),
+        ]
+        if args.max_steps is not None:
+            argv_inner += ["--max-steps", str(args.max_steps)]
+        if args.dry_run:
+            argv_inner.append("--dry-run")
+        return agent_mod.main(argv_inner)
 
     return _not_implemented(args.command)
 

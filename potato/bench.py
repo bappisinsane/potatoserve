@@ -305,6 +305,12 @@ def run_baseline(
     quality_ctx: int = quality_mod.DEFAULT_CTX,
     quality_binary: Optional[str] = None,
     dry_run: bool = False,
+    # --- Phase 3 agent-eval (spec section 6: success rate on live server) ---
+    agent_endpoint: Optional[str] = None,
+    agent_tasks: Optional[str] = None,
+    agent_repeats: int = 1,
+    agent_temperature: float = 0.0,
+    agent_max_steps: Optional[int] = None,
 ) -> Optional[Path]:
     """Run llama-bench (speed + VRAM) and/or llama-perplexity (quality).
 
@@ -366,6 +372,21 @@ def run_baseline(
                 chunks=chunks, ngl=ngl, ctx=quality_ctx,
             )
             print(">> " + " ".join(pcmd))
+        if agent_endpoint:
+            # Validate + print the agent plan without touching the network.
+            from potato import agenteval as agent_mod
+
+            agent_tasks_path = Path(agent_tasks) if agent_tasks else agent_mod.DEFAULT_TASKS_DIR
+            try:
+                loaded = agent_mod.load_tasks(agent_tasks_path)
+            except ValueError as exc:
+                raise RuntimeError(f"agent task suite invalid: {exc}") from exc
+            print(
+                f">> agent-eval: {len(loaded)} task(s) from {agent_tasks_path} "
+                f"vs {agent_endpoint} (repeats={agent_repeats}, "
+                f"temperature={agent_temperature}, "
+                f"max_steps={agent_max_steps if agent_max_steps is not None else 'per-task'})"
+            )
         return None
 
     # --- Speed phase (skipped by --quality-only) ---------------------------
@@ -478,6 +499,34 @@ def run_baseline(
             merged_spread = dict(record.spread or {})
             merged_spread.update(qres.spread)
             record.spread = merged_spread
+
+    # --- Agent-eval phase (Phase 3: the final gate, spec section 6) --------
+    if agent_endpoint:
+        from potato import agenteval as agent_mod
+
+        tasks = agent_mod.load_tasks(
+            Path(agent_tasks) if agent_tasks else agent_mod.DEFAULT_TASKS_DIR
+        )
+        print(f">> agent-eval: {len(tasks)} tasks vs {agent_endpoint} "
+              f"(repeats={agent_repeats}, temperature={agent_temperature})")
+        all_runs, served_model = agent_mod.run_suite(
+            tasks, agent_endpoint, repeats=agent_repeats,
+            temperature=agent_temperature, max_steps_override=agent_max_steps,
+        )
+        agent_metrics, agent_spread = agent_mod.aggregate_results(all_runs)
+        record.metrics.update(agent_metrics)
+        if record.config is None:
+            record.config = {}
+        record.config.update({
+            "agent_endpoint": agent_endpoint,
+            "agent_served_model": served_model,
+            "agent_repeats": agent_repeats,
+            "agent_temperature": agent_temperature,
+        })
+        merged_spread = dict(record.spread or {})
+        merged_spread.update(agent_spread)
+        record.spread = merged_spread
+        print(agent_mod.render_summary(record.to_dict()))
 
     try:
         path = write_record(record, results_dir)

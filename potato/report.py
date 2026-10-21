@@ -47,6 +47,7 @@ SAMPLE_KEYS: Dict[str, str] = {
     "kl_mean": "kl_samples",
     "top1_agree": "top1_samples",
     "ppl": "ppl_samples",
+    "agent_success": "agent_samples",
 }
 
 # Metrics where a SMALLER number is the better outcome (drives verdict wording).

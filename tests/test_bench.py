@@ -117,5 +117,44 @@ class ParseTest(unittest.TestCase):
         self.assertIsNone(data["metrics"]["ppl"])
 
 
+class AgentEvalPlanTest(unittest.TestCase):
+    """bench --dry-run must print (and validate) the agent-eval plan."""
+
+    def test_dry_run_prints_agent_plan(self) -> None:
+        import contextlib
+        import io
+        import tempfile
+        from pathlib import Path
+
+        buf = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            with contextlib.redirect_stdout(buf):
+                path = bench.run_baseline(
+                    model="dummy.gguf", binary="llama-bench", dry_run=True,
+                    results_dir=Path(tmp),
+                    agent_endpoint="http://127.0.0.1:8080",
+                )
+            self.assertEqual(list(Path(tmp).glob("*.json")), [])  # writes nothing
+        out = buf.getvalue()
+        self.assertIsNone(path)          # dry run writes nothing
+        self.assertIn("agent-eval: 50 task(s)", out)
+        self.assertIn("http://127.0.0.1:8080", out)
+
+    def test_dry_run_without_agent_is_unchanged(self) -> None:
+        import contextlib
+        import io
+        import tempfile
+        from pathlib import Path
+
+        buf = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            with contextlib.redirect_stdout(buf):
+                bench.run_baseline(
+                    model="dummy.gguf", binary="llama-bench", dry_run=True,
+                    results_dir=Path(tmp),
+                )
+        self.assertNotIn("agent-eval", buf.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
