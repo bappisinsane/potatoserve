@@ -1,0 +1,74 @@
+[
+  {"id": "sh-01", "category": "shell", "name": "mkdir-tree",
+   "prompt": "Create the directory path a/b/c (including parents) and an empty file a/b/c/deep.txt inside it.",
+   "setup": {}, "tools": [], "inject_errors": [], "max_steps": 8,
+   "checker": {"type": "files_exist", "paths": ["a/b/c/deep.txt"]}},
+
+  {"id": "sh-02", "category": "shell", "name": "create-then-move",
+   "prompt": "First create stage1.txt containing exactly \"ready\", then move it to out/final.txt (create directory out if needed). stage1.txt must not exist afterwards.",
+   "setup": {}, "tools": [], "inject_errors": [], "max_steps": 10,
+   "checker": {"type": "all", "of": [
+     {"type": "file_contains", "path": "out/final.txt", "all_of": ["ready"]},
+     {"type": "file_missing", "path": "stage1.txt"}]}},
+
+  {"id": "sh-03", "category": "shell", "name": "merge-two-files",
+   "prompt": "Create merged.txt containing the contents of part1.txt followed by the contents of part2.txt, in that order.",
+   "setup": {"part1.txt": "ONE\n", "part2.txt": "TWO\n"},
+   "tools": [], "inject_errors": [], "max_steps": 8,
+   "checker": {"type": "file_equals", "path": "merged.txt",
+               "content": "ONE\nTWO\n"}},
+
+  {"id": "sh-04", "category": "shell", "name": "copy-then-edit-copy",
+   "prompt": "Copy template.txt to copy.txt, then in copy.txt ONLY change the first line \"original line\" to \"edited line\". template.txt must stay unchanged.",
+   "setup": {"template.txt": "original line\nsecond line\n"},
+   "tools": [], "inject_errors": [], "max_steps": 10,
+   "checker": {"type": "all", "of": [
+     {"type": "file_contains", "path": "copy.txt",
+      "all_of": ["edited line", "second line"], "none_of": ["original line"]},
+     {"type": "file_contains", "path": "template.txt",
+      "all_of": ["original line"]}]}},
+
+  {"id": "sh-05", "category": "shell", "name": "rename-extension",
+   "prompt": "Rename page.html to page.md (same content, old file gone).",
+   "setup": {"page.html": "<html><body>hi</body></html>\n"},
+   "tools": [], "inject_errors": [], "max_steps": 8,
+   "checker": {"type": "all", "of": [
+     {"type": "files_exist", "paths": ["page.md"]},
+     {"type": "file_missing", "path": "page.html"}]}},
+
+  {"id": "sh-06", "category": "shell", "name": "build-log-tree",
+   "prompt": "Create directories logs/2024/01 and logs/2024/02, and create logs/latest.txt containing exactly \"ok\".",
+   "setup": {}, "tools": [], "inject_errors": [], "max_steps": 8,
+   "checker": {"type": "all", "of": [
+     {"type": "files_exist",
+      "paths": ["logs/2024/01", "logs/2024/02", "logs/latest.txt"]},
+     {"type": "file_contains", "path": "logs/latest.txt", "all_of": ["ok"]}]}},
+
+  {"id": "sh-07", "category": "shell", "name": "delete-junk-only",
+   "prompt": "Delete junk.txt. keep.txt must remain.",
+   "setup": {"junk.txt": "temp\ngarbage\n", "keep.txt": "important\n"},
+   "tools": [], "inject_errors": [], "max_steps": 8,
+   "checker": {"type": "all", "of": [
+     {"type": "file_missing", "path": "junk.txt"},
+     {"type": "files_exist", "paths": ["keep.txt"]}]}},
+
+  {"id": "sh-08", "category": "shell", "name": "concatenate-files",
+   "prompt": "Create combined.txt containing the contents of a.txt then b.txt, in that order.",
+   "setup": {"a.txt": "alpha\n", "b.txt": "beta\n"},
+   "tools": [], "inject_errors": [], "max_steps": 8,
+   "checker": {"type": "file_equals", "path": "combined.txt",
+               "content": "alpha\nbeta\n"}},
+
+  {"id": "sh-09", "category": "shell", "name": "count-files",
+   "prompt": "Count how many files are in the data/ directory and write just that number (no other text) to count.txt.",
+   "setup": {"data/x.txt": "1\n", "data/y.txt": "2\n", "data/z.txt": "3\n"},
+   "tools": [], "inject_errors": [], "max_steps": 8,
+   "checker": {"type": "file_equals", "path": "count.txt", "content": "3\n"}},
+
+  {"id": "sh-10", "category": "shell", "name": "uppercase-file",
+   "prompt": "Create upper.txt containing the contents of input.txt converted to UPPERCASE.",
+   "setup": {"input.txt": "loud and clear\n"},
+   "tools": [], "inject_errors": [], "max_steps": 8,
+   "checker": {"type": "file_equals", "path": "upper.txt",
+               "content": "LOUD AND CLEAR\n"}}
+]
