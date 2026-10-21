@@ -32,9 +32,23 @@ threshold decision, curve for both models) **await GPU runs** — exact commands
 in `memory.md`; no numbers were fabricated.
 
 ## Phase 3 — Agent-eval (≈ 2 weeks)
-- [ ] 50-task suite + checkers; validate checkers with a strong reference model
-- [ ] Integrate into bench + tune
+- [x] 50-task suite + checkers
+- [ ] Validate checkers with a strong reference model
+- [x] Integrate into bench (tune lands in Phase 4)
 **Exit:** success rates with confidence intervals for ≥ 5 configs.
+**Status (2026-10-21):** code complete — `potato/agenteval.py` runs the
+50-task suite (`evals/agent_tasks/tasks/`, 5 categories × 10) against a live
+`llama-server`, executing model-emitted tool calls **client-side in a sandbox**
+(path-traversal guarded) and scoring them with 11 programmatic checkers
+(`evals/agent_tasks/checkers.py`). Metrics: `agent_success` (median of per-repeat
+rates) + Wilson 95% interval over all trials, invalid tool-call %, mean steps,
+wall time, tokens. Wired as `potato agent-eval` and `potato bench
+--agent-endpoint`; the metric flows into the §8 record and `potato report`.
+130 unit tests pass (stdlib only) — the whole loop is covered against a fake
+OpenAI server, so **no GPU/model is needed for the tests**. The remaining
+checkbox (*validate checkers with a strong reference model*) and the exit
+criterion (≥ 5 configs) **await GPU runs** — exact commands in `memory.md`;
+no numbers were fabricated.
 
 ## Phase 4 — Auto-tuner (≈ 2 weeks)
 - [ ] Memory model validated against measured VRAM (±5%)
