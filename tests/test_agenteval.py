@@ -10,6 +10,7 @@ import json
 import tempfile
 import threading
 import unittest
+import unittest.mock
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -490,6 +491,51 @@ class AgentLoopFakeServerTest(unittest.TestCase):
                           chat_timeout_s=2.0)
         self.assertFalse(result.passed)
         self.assertIn("cannot reach", result.harness_error or "")
+
+    def test_connection_reset_fails_soft(self) -> None:
+        """A server that drops the connection must fail ONE task, not the run.
+
+        http.client.RemoteDisconnected is a ConnectionResetError, NOT a
+        urllib.error.URLError, so a naive `except URLError` lets it escape
+        and abort the whole suite (observed against a real llama-server
+        that reset the slot when the context window filled).
+        """
+        import http.client
+
+        from potato import agenteval as agent_mod
+
+        with unittest.mock.patch.object(
+            agent_mod.urllib.request, "urlopen",
+            side_effect=http.client.RemoteDisconnected("connection reset"),
+        ):
+            result = run_task(simple_task(), "http://127.0.0.1:8080", "m",
+                              chat_timeout_s=2.0)
+        self.assertFalse(result.passed)
+        self.assertIn("reset by the server", result.harness_error or "")
+        # It must be an EndpointError so run_suite's per-task handling sees it.
+        self.assertNotIn("Traceback", result.harness_error or "")
+
+    def test_max_tokens_is_sent_on_every_request(self) -> None:
+        """Every completion must carry a max_tokens cap.
+
+        Without it the model can generate until it fills the server's whole
+        context window, which makes llama-server reset the slot mid-request
+        and kills the connection.
+        """
+        self.server.queue = [final_resp("ok")]
+        self._run(simple_task(checker={"type": "answer_contains",
+                                        "all_of": ["ok"]}))
+        self.assertEqual(len(self.server.chat_requests), 1)
+        self.assertIn("max_tokens", self.server.chat_requests[0])
+        self.assertGreater(self.server.chat_requests[0]["max_tokens"], 0)
+
+    def test_max_tokens_override_is_honoured(self) -> None:
+        self.server.queue = [final_resp("ok")]
+        run_task(simple_task(checker={"type": "answer_contains",
+                                      "all_of": ["ok"]}),
+                 self.server.endpoint, "fake-model.gguf",
+                 chat_timeout_s=5.0, max_tokens=64)
+        self.assertEqual(self.server.chat_requests[0]["max_tokens"], 64)
 
 
 def _tr(tid, passed, steps=3, wall=1.0, invalid=0, pt=10, ct=5, err=None):

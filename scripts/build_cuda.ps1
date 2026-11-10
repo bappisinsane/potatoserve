@@ -96,6 +96,15 @@ $cmakeArgs = @(
 if ($Generator -eq "Ninja") {
     $cmakeArgs += @("-DCMAKE_C_COMPILER=cl", "-DCMAKE_CXX_COMPILER=cl")
 }
+# See build_vulkan.ps1: without explicit Release flags the MSVC build has no
+# /DNDEBUG (asserts stay live) and no /EHsc (C++ exceptions abort the
+# process). Both were observed crashing llama-server with 0xc0000409.
+if ($Config -eq "Release") {
+    $cmakeArgs += @(
+        "-DCMAKE_C_FLAGS_RELEASE=/O2 /DNDEBUG",
+        "-DCMAKE_CXX_FLAGS_RELEASE=/O2 /DNDEBUG /EHsc"
+    )
+}
 
 Write-Host "`n>> cmake $($cmakeArgs -join ' ')" -ForegroundColor Yellow
 cmake @cmakeArgs

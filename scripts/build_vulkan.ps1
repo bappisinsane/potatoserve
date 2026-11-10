@@ -84,6 +84,27 @@ $cmakeArgs = @(
     "-DGGML_NATIVE=OFF",
     "-DLLAMA_CURL=OFF"
 )
+# MSVC + CMake leaves the C/C++ flag variables empty unless the toolchain sets
+# them, so this build was missing three things that matter:
+#
+#   /O2       - no optimisation at all.
+#   /DNDEBUG  - assert() stays live, so a failed assertion aborts the process
+#               with 0xc0000409 in ucrtbase.dll.
+#   /EHsc     - C++ exceptions have NO unwind semantics without it. When an
+#               exception propagates the runtime calls abort(), which is
+#               EXACTLY the crash observed killing llama-server mid-eval
+#               (reproduced deterministically on task sh-10: the process died
+#               at n_gen = 1005 with no message). The build log is full of
+#               "warning C4530: C++ exception handler used, but unwind
+#               semantics are not enabled. Specify /EHsc".
+#
+# Define all three explicitly.
+if ($Config -eq "Release") {
+    $cmakeArgs += @(
+        "-DCMAKE_C_FLAGS_RELEASE=/O2 /DNDEBUG",
+        "-DCMAKE_CXX_FLAGS_RELEASE=/O2 /DNDEBUG /EHsc"
+    )
+}
 if ($Generator -eq "Ninja") {
     $cmakeArgs += @("-DCMAKE_C_COMPILER=cl", "-DCMAKE_CXX_COMPILER=cl")
 }

@@ -51,6 +51,7 @@ CATEGORIES = ("error_recovery", "file_edit", "search", "shell", "tool_call")
 DEFAULT_MAX_STEPS = 14          # upper bound; each task may set its own lower
 DEFAULT_CHAT_TIMEOUT_S = 120.0  # per HTTP completion
 DEFAULT_TOOL_TIMEOUT_S = 30.0   # per run_shell invocation
+DEFAULT_MAX_TOKENS = 1024       # per completion; caps runaway generations
 TOOL_OUTPUT_LIMIT = 8000        # chars of tool output echoed back to the model
 
 SYSTEM_PROMPT = (
@@ -377,6 +378,17 @@ def _http_json(url: str, payload: Optional[Dict[str, Any]], timeout_s: float) ->
         ) from exc
     except TimeoutError as exc:
         raise EndpointError(f"timeout after {timeout_s:g}s waiting for {url}") from exc
+    except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError) as exc:
+        # http.client.RemoteDisconnected is a ConnectionResetError (NOT a
+        # URLError), so the handler above misses it. A server that drops the
+        # connection mid-request (e.g. the model filled the context window
+        # and llama-server reset the slot) must fail ONE task softly, not
+        # sink the whole suite run.
+        raise EndpointError(
+            f"connection to {url} was reset by the server ({exc.__class__.__name__}). "
+            "The server may have closed the slot (e.g. context window filled) or "
+            "crashed; check the llama-server log."
+        ) from exc
     try:
         parsed = json.loads(body)
     except ValueError as exc:
@@ -398,7 +410,7 @@ def list_models(endpoint: str, timeout_s: float = 15.0) -> str:
 def chat_completion(
     endpoint: str, model: str, messages: List[Dict[str, Any]],
     tools: List[Dict[str, Any]], temperature: float, seed: int,
-    timeout_s: float,
+    timeout_s: float, max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> Dict[str, Any]:
     payload = {
         "model": model,
@@ -407,6 +419,12 @@ def chat_completion(
         "temperature": temperature,
         "seed": seed,
         "stream": False,
+        # Cap the completion length. Without this the model may generate until
+        # it fills the server's whole context window, which makes llama-server
+        # reset the slot mid-request (observed: n_tokens=4095, truncated=1)
+        # and kills the connection. A tool call is short; a runaway generation
+        # is a model failure, not a reason to lose the run.
+        "max_tokens": max_tokens,
     }
     resp = _http_json(_chat_url(endpoint), payload, timeout_s)
     choices = resp.get("choices")
@@ -460,6 +478,7 @@ def run_task(
     chat_timeout_s: float = DEFAULT_CHAT_TIMEOUT_S,
     tool_timeout_s: float = DEFAULT_TOOL_TIMEOUT_S,
     max_steps_override: Optional[int] = None,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> TaskResult:
     """Run one task to completion in a fresh sandbox, then evaluate it.
 
@@ -491,7 +510,8 @@ def run_task(
         for step in range(1, limit + 1):
             steps = step
             resp = chat_completion(
-                endpoint, model, messages, tools, temperature, seed, chat_timeout_s
+                endpoint, model, messages, tools, temperature, seed, chat_timeout_s,
+                max_tokens=max_tokens,
             )
             usage = resp.get("usage") or {}
             prompt_tokens += int(usage.get("prompt_tokens") or 0)
@@ -698,6 +718,7 @@ def run_suite(
     tool_timeout_s: float = DEFAULT_TOOL_TIMEOUT_S,
     max_steps_override: Optional[int] = None,
     progress: bool = True,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> Tuple[List[List[TaskResult]], str]:
     """Run the whole suite *repeats* times; returns (runs, model_id).
 
@@ -715,7 +736,7 @@ def run_suite(
             result = run_task(
                 task, endpoint, model, temperature=temperature, seed=seed,
                 chat_timeout_s=chat_timeout_s, tool_timeout_s=tool_timeout_s,
-                max_steps_override=max_steps_override,
+                max_steps_override=max_steps_override, max_tokens=max_tokens,
             )
             run.append(result)
             if progress:
@@ -857,6 +878,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         help="Per-request timeout in seconds.")
     parser.add_argument("--tool-timeout", type=float, default=DEFAULT_TOOL_TIMEOUT_S,
                         help="Per run_shell invocation timeout in seconds.")
+    parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS,
+                        help="Max tokens per completion; caps runaway generations "
+                             "that would otherwise fill the server's context window.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Validate the suite and print the plan; no HTTP, no writes.")
     args = parser.parse_args(sys.argv[1:] if argv is None else list(argv))
@@ -899,7 +923,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             tasks, args.endpoint, repeats=args.repeats,
             temperature=args.temperature, seed=args.seed,
             chat_timeout_s=args.chat_timeout, tool_timeout_s=args.tool_timeout,
-            max_steps_override=args.max_steps,
+            max_steps_override=args.max_steps, max_tokens=args.max_tokens,
         )
         run_id = args.run_id or time.strftime("agent-%Y%m%dT%H%M%SZ", time.gmtime())
         record = build_record(
